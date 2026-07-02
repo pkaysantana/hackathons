@@ -60,7 +60,7 @@ Red `deny` banner. Empty content panel.
 
 Click **Step 3**.
 
-> "Four parents feed the derived memo: public target paper, internal SAR table, toxicity report, and adverse-event memo. Lineage is checked on every read — not just at derivation time."
+> "Four parents feed the derived memo: public target paper, internal SAR table, toxicity report, and adverse-event memo. The read requires the Phase II memo grant plus read grants on every included source in that lineage."
 
 Point to **Lineage** panel.
 
@@ -94,7 +94,7 @@ Click **Step 7**. Scroll to **Audit Log**. Expand a row.
 
 Click **Step 8**. Point to the Flow Banner, token boundary tiles, and **Evidence for judges** if the judge asks for tests.
 
-> "Pure SQL permission check — 0 model tokens, no LLM permission decision. Optional open-weight model only runs after authorization via POST /query."
+> "Pure SQL permission check — 0 model tokens, no LLM permission decision. Source-lineage grants are enforced directly today; a compiled effective policy cache would only be a future optimization. Optional open-weight model only runs after authorization via POST /query."
 
 **If asked about BasedAI bonus criteria:**
 

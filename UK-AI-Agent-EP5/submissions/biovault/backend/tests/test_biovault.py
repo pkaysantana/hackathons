@@ -12,6 +12,7 @@ Covers the BasedAI review requirements:
 9. stale capability denied after simulated source ACL revoke
 10. expired grant denies read (temporal access)
 11. CRO /query deny returns no plaintext (query-time gate)
+12. derived read denies when included source-lineage grants are missing
 """
 import json
 import time
@@ -108,6 +109,44 @@ def test_authorised_grant_succeeds(seeded, client):
 
     # Now the intern can read it.
     assert read(client, tokens["u_intern"], "internal_sar_table").json()["access"]["decision"] == "allow"
+
+
+def test_derived_artifact_requires_included_source_grants(seeded, client):
+    tokens = seeded
+
+    # A target-artifact grant alone must not disclose a derived memo.
+    # The reader also needs read grants on every included source in its lineage.
+    r = client.post(
+        f"/artifacts/{PHASE2}/grant",
+        headers=auth(tokens["u_ceo"]),
+        json={
+            "subject_user_id": "u_intern",
+            "operation": "read",
+            "purpose": "lineage_policy_regression",
+        },
+    )
+    assert r.json()["granted"] is True
+
+    r = read(client, tokens["u_intern"], PHASE2)
+    body = r.json()
+    assert body["access"]["decision"] == "deny"
+    assert body["access"]["reason"] == "missing_source_lineage_capability"
+    assert "plaintext_content" not in body["artifact"]
+
+    req_id = body["access"]["request_id"]
+    events = client.get("/audit").json()
+    event = next((e for e in events if e.get("request_id") == req_id), None)
+    assert event is not None, "Deny audit event not found by request_id"
+    assert event["decision"] == "deny"
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"])
+    assert detail["principal"] == "u_intern"
+    assert detail["lineage_decision"] == "missing_source_lineage_capability"
+    assert detail["missing_source_artifact_id"] in {
+        "internal_sar_table",
+        "toxicity_report",
+        "adverse_event_memo",
+    }
 
 
 # ---------------------------------------------------------------------------

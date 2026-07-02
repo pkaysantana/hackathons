@@ -30,9 +30,11 @@ models only receive authorized context after capability, lineage, revocation, an
 |---|---|
 | **Capability tokens** | Bearer token → `(principal, artifact, operation)` grant before any read |
 | **Deterministic access** | Pure SQL permission check — 0 model tokens, sub-millisecond |
-| **Lineage** | Derived artifacts record parent sources; every read re-checks parent integrity |
+| **Lineage** | Derived reads require the target grant plus read grants on every included source in the transitive lineage |
 | **Revocation propagation** | Revoke a source → BFS quarantine of all descendants |
 | **Audit** | Every decision logged with `request_id`, principal, operation, reason, latency, structured provenance |
+
+BioVault enforces the source-lineage rule directly in this prototype. A compiled/effective strictest policy cache is a later optimization, not a separate trust path. Redacted/declassified exceptions require explicit authority, source hashes, attestation, and audit; this prototype implements the governed redaction variant.
 
 ---
 
@@ -73,7 +75,7 @@ Full walkthrough: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)
 | No LLM in permission path | No model imports or calls in backend permission path | Code scan; UI compliance matrix | Optional generation only after authorization |
 | Audit logs | `request_id`, principal, artifact, operation, decision, reason, latency_ms, structured detail | `test_artifact_read_audit_contains_structured_detail`, `test_audit_records_all_operation_types` | Regulatory-style traceability — not tamper-evident compliance-grade audit |
 | P99 under 200 ms | Permission latency benchmark + live metrics | `test_permission_latency_p99_under_200ms`, `GET /metrics/permission-latency` | Local hackathon benchmark — not production load test |
-| Derived memory lineage | `lineage_edges` + source hash / inclusion metadata | `test_governed_redaction_succeeds_on_healthy_sources`, lineage API | Prototype lineage graph |
+| Derived memory lineage | Read requires the derived artifact grant plus read grants on every included transitive source; redacted-out sources are explicit governed exceptions | `test_derived_artifact_requires_included_source_grants`, `test_governed_redaction_succeeds_on_healthy_sources`, lineage API | Prototype lineage graph; no compiled policy cache yet |
 | Source revocation propagation | BFS quarantine of descendants on revoke | `test_multi_level_revocation_propagation`, `test_adverse_event_revocation_quarantines_phase2_memo` | Simulated source revocation |
 | Open-weight compliance | Permission layer is model-free; optional model after authorization can be open-weight | No closed-model runtime dependency; `POST /query` gate | Open-weight compatible — not deeply integrated |
 | Bonus: temporal access | `expires_at` grant check in `has_grant()` | `test_expired_grant_denies_artifact_read` | Grant expiry demo — not full policy calendar engine |

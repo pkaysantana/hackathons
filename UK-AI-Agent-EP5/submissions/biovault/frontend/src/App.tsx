@@ -182,14 +182,14 @@ const STATIC_CHECKS: Array<{
   },
   {
     label: "Governed redaction — not a bypass",
-    detail: "'redact' capability required on every parent; revoked source blocks derivation",
-    evidence: "test: test_redaction_cannot_launder_revoked_source",
+    detail: "'redact' capability required on every parent; attestation stores source hashes and redacted/included edges",
+    evidence: "test: test_redaction_cannot_launder_revoked_source + test_governed_redaction_succeeds_on_healthy_sources",
     badge: "TESTED",
   },
   {
     label: "Lineage-aware derived artifacts",
-    detail: "lineage_edges stores source_hash + inclusion (included/redacted) per edge",
-    evidence: "test: test_governed_redaction_succeeds_on_healthy_sources",
+    detail: "Derived reads require the target grant plus read grants on every included transitive source",
+    evidence: "test: test_derived_artifact_requires_included_source_grants",
     badge: "TESTED",
   },
   {
@@ -350,12 +350,12 @@ const CONCEPTS = [
   {
     icon: "⬡",
     title: "Artifact-level, not role-level",
-    body: "RBAC controls users. BioVault controls artifacts and their descendants. A user's role is irrelevant — only a non-revoked capability grant on the exact artifact grants access.",
+    body: "RBAC controls users. BioVault controls artifacts and their descendants. A user's role is irrelevant — derived reads require the exact artifact grant plus included source-lineage grants.",
   },
   {
     icon: "⬡",
     title: "Lineage-inherited constraints",
-    body: "Agent-created artifacts inherit constraints from their source lineage. A derived artifact is only readable if every source it was built from is still healthy.",
+    body: "Agent-created artifacts inherit constraints from their source lineage. A derived artifact is only readable when every included source is healthy and granted to the requester.",
   },
   {
     icon: "⬡",
@@ -439,7 +439,7 @@ function ComparisonCards() {
 const DEMO_STEPS = [
   {
     label: "Regulatory Lead opens Phase II readiness memo",
-    description: "ALLOW — Regulatory holds read capability; all source artifacts active",
+    description: "ALLOW — Regulatory holds target read grant plus included source-lineage grants",
   },
   {
     label: "External CRO attempts Phase II memo",

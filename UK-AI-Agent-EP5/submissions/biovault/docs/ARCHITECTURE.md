@@ -88,9 +88,10 @@ Agent runtime (any model)
 │     ├─ artifact.status in (active, redacted)?      → no  → deny          │
 │     ├─ has_grant(principal, artifact, "read")?     → no  → deny          │
 │     └─ artifact.type == "derived"?                                       │
-│         ├─ for each included parent in lineage_edges:                    │
-│         │   └─ parent.status in (revoked, quarantined)? → deny           │
-│         └─ (redacted artifact: only included parents checked)            │
+│         ├─ for each included transitive parent/source in lineage_edges:   │
+│         │   ├─ parent.status in (revoked, quarantined)? → deny           │
+│         │   └─ has_grant(principal, parent, "read")?    → no → deny      │
+│         └─ redacted-out parents are excluded only by attestation         │
 │                                                                          │
 │  3. log_audit()                                                          │
 │     └─ timestamp, principal_id, artifact_id, operation                   │
@@ -231,13 +232,15 @@ CREATE INDEX IF NOT EXISTS idx_users_token
 |---|---|
 | Capability per `(principal, artifact, operation)` | Minimise blast radius — no wildcard grants |
 | SHA-256 token hash only stored | Eliminates token leakage via DB read |
-| Lineage integrity on every read | Ensures revocation effect is felt at read time, not just derivation time |
+| Source-lineage access on every read | Requires the derived artifact grant plus read grants on every included transitive source |
 | BFS quarantine on revoke | O(n) where n is number of descendants; consistent regardless of depth |
 | Single biotech seed via `POST /seed` | BVK-14 demo graph for AI science agent memory governance |
 | SQLite for demo | Zero-infrastructure; replace with PostgreSQL for production concurrency |
 | No model in permission path | Permission decisions must be auditable, reproducible, and deterministic |
 | `POST /query` as model gate | Single choke point; all agent access goes through the same enforcement stack |
 | Governed redaction | Prevents redaction from being used as a bypass around parent capability checks |
+
+The prototype enforces this semantic rule directly at read time. A compiled/effective strictest policy cache is a later optimization for scale, not a different permission model. Redacted/declassified exceptions require explicit authority, source hashes, attestation, and audit; this prototype implements the governed redaction variant.
 
 ---
 

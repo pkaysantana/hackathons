@@ -50,6 +50,7 @@ fernet = Fernet(FERNET_KEY)
 # what an authenticated principal may do to a specific artifact.
 Operation = Literal["read", "derive", "revoke", "grant", "redact"]
 Decision = Literal["allow", "deny"]
+AccessMetadata = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -392,12 +393,6 @@ def get_artifact(conn: sqlite3.Connection, artifact_id: str) -> sqlite3.Row | No
     return conn.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
 
 
-def get_direct_edges(conn: sqlite3.Connection, child_id: str) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM lineage_edges WHERE child_artifact_id = ?", (child_id,)
-    ).fetchall()
-
-
 def get_transitive_parents(conn: sqlite3.Connection, artifact_id: str) -> list[sqlite3.Row]:
     rows: list[sqlite3.Row] = []
     seen: set[str] = set()
@@ -417,6 +412,29 @@ def get_transitive_parents(conn: sqlite3.Connection, artifact_id: str) -> list[s
                 seen.add(parent["id"])
                 rows.append(parent)
                 stack.append(parent["id"])
+    return rows
+
+
+def get_included_lineage_parents(conn: sqlite3.Connection, artifact_id: str) -> list[sqlite3.Row]:
+    rows: list[sqlite3.Row] = []
+    seen: set[str] = set()
+    stack = [artifact_id]
+    while stack:
+        current = stack.pop()
+        parents = conn.execute(
+            """
+            SELECT a.*, e.inclusion FROM artifacts a
+            JOIN lineage_edges e ON e.parent_artifact_id = a.id
+            WHERE e.child_artifact_id = ?
+            """,
+            (current,),
+        ).fetchall()
+        for parent in parents:
+            if parent["inclusion"] != "included" or parent["id"] in seen:
+                continue
+            seen.add(parent["id"])
+            rows.append(parent)
+            stack.append(parent["id"])
     return rows
 
 
@@ -485,51 +503,54 @@ def find_grant_id(
 
 def evaluate_access(
     conn: sqlite3.Connection, user_id: str, artifact_id: str, operation: Operation
-) -> tuple[Decision, str]:
+) -> tuple[Decision, str, AccessMetadata]:
     """
     Capability-based access check. Allows access only when ALL hold:
     1. User (resolved from a token, never a query param) exists.
     2. Artifact exists.
     3. Artifact status is active or redacted.
     4. User holds a non-revoked, non-expired capability grant for the operation.
-    5. Lineage integrity:
-       - Non-redacted derived artifact: deny if ANY transitive source is
-         revoked or quarantined.
-       - Redacted derived artifact: deny only if an INCLUDED parent (one whose
-         content was not redacted out) is revoked or quarantined. Redacted-out
-         parents are excluded because their content was attested-removed.
+    5. Derived read lineage:
+       - Included transitive sources must not be revoked or quarantined.
+       - Read operations also require a live read grant on every included
+         transitive source.
+       - Redacted-out parents are excluded because their content was
+         attested-removed during governed redaction.
     """
     user = conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone()
     if not user:
-        return "deny", "user_not_found"
+        return "deny", "user_not_found", {}
 
     artifact = get_artifact(conn, artifact_id)
     if not artifact:
-        return "deny", "artifact_not_found"
+        return "deny", "artifact_not_found", {}
 
     if artifact["status"] == "quarantined":
-        return "deny", "derived_from_revoked_source"
+        return "deny", "derived_from_revoked_source", {}
     if artifact["status"] not in ("active", "redacted"):
-        return "deny", f"artifact_status_{artifact['status']}"
+        return "deny", f"artifact_status_{artifact['status']}", {}
 
     if not has_grant(conn, user_id, artifact_id, operation):
-        return "deny", "missing_capability_grant"
+        return "deny", "missing_capability_grant", {}
 
     if artifact["type"] == "derived":
-        if artifact["status"] == "redacted":
-            # Only included parents can taint a redacted artifact.
-            for edge in get_direct_edges(conn, artifact_id):
-                if edge["inclusion"] != "included":
-                    continue
-                parent = get_artifact(conn, edge["parent_artifact_id"])
-                if parent and parent["status"] in ("revoked", "quarantined"):
-                    return "deny", "derived_from_revoked_source"
-        else:
-            for parent in get_transitive_parents(conn, artifact_id):
-                if parent["status"] in ("revoked", "quarantined"):
-                    return "deny", "derived_from_revoked_source"
+        included_parents = get_included_lineage_parents(conn, artifact_id)
+        metadata: AccessMetadata = {
+            "source_lineage_grants_checked": operation == "read",
+            "included_source_count": len(included_parents),
+        }
+        for parent in included_parents:
+            if parent["status"] in ("revoked", "quarantined"):
+                metadata["blocked_source_artifact_id"] = parent["id"]
+                return "deny", "derived_from_revoked_source", metadata
+        if operation == "read":
+            for parent in included_parents:
+                if not has_grant(conn, user_id, parent["id"], "read"):
+                    metadata["missing_source_artifact_id"] = parent["id"]
+                    return "deny", "missing_source_lineage_capability", metadata
+        return "allow", "capability_and_lineage_valid", metadata
 
-    return "allow", "capability_and_lineage_valid"
+    return "allow", "capability_and_lineage_valid", {}
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +600,7 @@ def can_access(
     rid = request_id or new_request_id()
     start = time.perf_counter()
     with connect() as conn:
-        decision, reason = evaluate_access(conn, user_id, artifact_id, operation)
+        decision, reason, access_metadata = evaluate_access(conn, user_id, artifact_id, operation)
         latency_ms = round((time.perf_counter() - start) * 1000, 3)
 
         # Structured provenance detail — logged on every access event.
@@ -598,6 +619,7 @@ def can_access(
         if artifact_row and artifact_row["type"] == "derived":
             detail["lineage_checked"] = True
             detail["lineage_decision"] = "passed" if decision == "allow" else reason
+            detail.update(access_metadata)
 
         log_audit(conn, user_id, artifact_id, operation, decision, reason, latency_ms, rid, detail)
         return {"decision": decision, "reason": reason, "latency_ms": latency_ms, "request_id": rid}
@@ -697,7 +719,8 @@ def _seed_biotech(conn: sqlite3.Connection) -> tuple[int, int, dict[str, str]]:
     all_ids = [a[0] for a in artifacts]
     grant_many(conn, "u_ceo", all_ids, ["read", "derive", "revoke", "grant", "redact"])
     grant_many(conn, "u_regulatory",
-               ["toxicity_report", "adverse_event_memo", "phase2_readiness_memo"], ["read"])
+               ["public_target_paper", "internal_sar_table", "toxicity_report",
+                "adverse_event_memo", "phase2_readiness_memo"], ["read"])
     grant_many(conn, "u_research",
                ["public_target_paper", "internal_sar_table", "docking_report", "toxicity_report"],
                ["read", "derive"])
