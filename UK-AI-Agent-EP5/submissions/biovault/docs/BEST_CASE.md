@@ -18,7 +18,7 @@ BioVault was built for **pharma AI agents**: derived clinical memos, adverse-eve
 What judges **see**:
 
 1. Live URL opens — dashboard loads **BVK-14 kinase programme** demo
-2. **Seed / Reset Demo** — biotech artifacts appear (Phase II memo, SAR table, adverse-event memo, …)
+2. **Start / Reset Demo** — biotech artifacts appear (Phase II memo, SAR table, adverse-event memo, …)
 3. **Nora Singh (Regulatory Lead)** opens **Phase II Readiness Memo** → **ALLOW** — derived from four source documents, content shown
 4. **Owen Brooks (External CRO)** attempts same memo → **DENY** — `missing_capability_grant`, no clinical content leaked
 5. Lineage view: public_target_paper + internal_sar_table + toxicity_report + adverse_event_memo → phase2_readiness_memo
@@ -88,9 +88,9 @@ What judges **see**:
 
 ### Tier 2 — Best case (strong pitch)
 
-| Feature | Why |
-|---|---|
-| **CRO agent script** (`POST /query` deny) | "Autonomous agent" without faking it |
+| Feature | Status | Why |
+|---|---|---|
+| **CRO agent script** (`POST /query` deny) | ✅ Built | `scripts/demo_agent_cro.py` — autonomous agent without faking it |
 | Rehearsed 2-min biotech script | Stage confidence |
 | 3 biotech screenshots in README | Visual proof |
 

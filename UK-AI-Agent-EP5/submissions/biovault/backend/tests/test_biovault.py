@@ -9,6 +9,9 @@ Covers the BasedAI review requirements:
 6. audit events for allow/deny/grant/revoke/derive
 7. permission latency benchmark (P99 < 200ms)
 8. structured audit detail on artifact reads and /query
+9. stale capability denied after simulated source ACL revoke
+10. expired grant denies read (temporal access)
+11. CRO /query deny returns no plaintext (query-time gate)
 """
 import json
 import time
@@ -364,3 +367,96 @@ def test_adverse_event_revocation_quarantines_phase2_memo(seeded, client):
     assert r.json()["access"]["decision"] == "deny"
     assert r.json()["access"]["reason"] == "derived_from_revoked_source"
     assert "plaintext_content" not in r.json()["artifact"]
+
+
+# ---------------------------------------------------------------------------
+# BasedAI Judge Max-Out — stale token, temporal expiry, query-time gate
+# ---------------------------------------------------------------------------
+
+def test_stale_capability_denied_after_source_revoke(seeded, client):
+    """Previously valid reader token cannot read derived memo after source revoke."""
+    tokens = seeded
+
+    before = read(client, tokens["u_regulatory"], PHASE2)
+    assert before.json()["access"]["decision"] == "allow"
+    assert "plaintext_content" in before.json()["artifact"]
+
+    client.post(
+        f"/artifacts/{ADVERSE}/revoke",
+        headers=auth(tokens["u_ceo"]),
+        json={"purpose": "simulated_source_acl_revocation"},
+    )
+
+    after = read(client, tokens["u_regulatory"], PHASE2)
+    body = after.json()
+    assert body["access"]["decision"] == "deny"
+    assert body["access"]["reason"] == "derived_from_revoked_source"
+    assert "plaintext_content" not in body["artifact"]
+
+    req_id = body["access"]["request_id"]
+    events = client.get("/audit").json()
+    event = next((e for e in events if e.get("request_id") == req_id), None)
+    assert event is not None, "Deny audit event not found by request_id"
+    assert event["decision"] == "deny"
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"])
+    assert "principal" in detail
+    assert detail["principal"] == "u_regulatory"
+
+
+def test_expired_grant_denies_artifact_read(seeded, client):
+    """Grant with expires_at in the past does not authorize read."""
+    tokens = seeded
+    past = "2020-01-01T00:00:00+00:00"
+
+    client.post(
+        "/artifacts/internal_sar_table/grant",
+        headers=auth(tokens["u_ceo"]),
+        json={
+            "subject_user_id": "u_intern",
+            "operation": "read",
+            "purpose": "temporal_access_evidence",
+            "expires_at": past,
+        },
+    )
+
+    r = read(client, tokens["u_intern"], "internal_sar_table")
+    body = r.json()
+    assert body["access"]["decision"] == "deny"
+    assert body["access"]["reason"] == "missing_capability_grant"
+    assert "plaintext_content" not in body["artifact"]
+
+    req_id = body["access"]["request_id"]
+    events = client.get("/audit").json()
+    event = next((e for e in events if e.get("request_id") == req_id), None)
+    assert event is not None, "Deny audit event not found by request_id"
+    assert event["decision"] == "deny"
+    assert event["detail"] is not None
+
+
+def test_cro_query_denied_returns_no_plaintext(seeded, client):
+    """Agent /query gate denies CRO before any context reaches a model."""
+    tokens = seeded
+
+    resp = client.post(
+        "/query",
+        headers=auth(tokens["u_cro"]),
+        json={"artifact_id": PHASE2, "purpose": "agent_retrieval_cro_evidence"},
+    )
+    body = resp.json()
+    assert body["decision"] == "deny"
+    assert body["reason"] == "missing_capability_grant"
+    assert "plaintext_content" not in body
+    assert "content" not in body
+    assert "context" not in body
+    assert "synthesis" not in body
+
+    req_id = body["request_id"]
+    events = client.get("/audit").json()
+    event = next((e for e in events if e.get("request_id") == req_id), None)
+    assert event is not None, "Query deny audit event not found by request_id"
+    assert event["decision"] == "deny"
+    assert event["detail"] is not None
+    detail = json.loads(event["detail"])
+    assert detail["purpose"] == "agent_retrieval_cro_evidence"
+    assert detail["principal"] == "u_cro"

@@ -4,7 +4,11 @@
 
 BioVault is a deterministic, LLM-free capability enforcement layer that sits between AI agents and a shared artifact store. The model — any open-weight runtime — is outside the enforcement boundary. It only sees content the gate has already authorised.
 
+**The retrieval layer (`GET /artifacts/{id}` and `POST /query`) is the enforcement boundary.** Every agent access decision happens here before any optional model generation.
+
 The demo seed is the **BVK-14 kinase programme** — pharma R&D memory governance for AI science agents.
+
+**Honest prototype scope:** source ACL/revocation events are **simulated** in this MVP (no external IAM sync). Audit logs provide **regulatory-style traceability**, not tamper-evident compliance-grade audit. P99 latency evidence is a **local hackathon benchmark**, not a production load test.
 
 ---
 
@@ -266,3 +270,17 @@ else:
 ```
 
 The capability token is issued at seed time (`POST /seed`) or via a grant (`POST /artifacts/{id}/grant`) and is passed to the agent by the platform layer. The model itself never holds or manages tokens.
+
+---
+
+## BasedAI judge evidence (honest scope)
+
+| Evidence area | What BioVault proves | What it does not claim |
+|---|---|---|
+| Retrieval-layer enforcement | `evaluate_access()` runs on every read and `/query` | Production-grade IAM integration |
+| Source ACL / revocation sync | Simulated revoke quarantines descendants; stale token denied | Real external ACL event sync |
+| No LLM in permission path | Zero model imports/calls in permission decision path | Wired open-weight generation in-repo |
+| Audit | `request_id` + structured detail on allow/deny | Tamper-evident compliance-grade audit |
+| P99 latency | Local benchmark under 200 ms in tests | Production load test |
+| Temporal access (bonus) | `expires_at` checked in `has_grant()` | Full policy calendar engine |
+| Query-time gate (bonus) | `/query` deny returns no plaintext | Full semantic inference prevention |

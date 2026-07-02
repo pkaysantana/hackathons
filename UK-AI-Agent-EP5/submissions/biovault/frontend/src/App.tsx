@@ -206,7 +206,78 @@ const STATIC_CHECKS: Array<{
     badge: "TESTED",
     liveKey: "audit",
   },
+  {
+    label: "Source ACL / revocation event sync",
+    detail: "Simulated source ACL/revocation event — revoke adverse_event_memo, stale token denied on derived memo",
+    evidence: "test: test_stale_capability_denied_after_source_revoke",
+    badge: "TESTED",
+    liveKey: "revocation",
+  },
+  {
+    label: "Temporal access rules",
+    detail: "Temporal expiry via expires_at grant check — expired grant does not authorize read",
+    evidence: "test: test_expired_grant_denies_artifact_read",
+    badge: "TESTED",
+  },
+  {
+    label: "Query-time gate / no plaintext on deny",
+    detail: "POST /query denies before context reaches a model — no plaintext returned on deny",
+    evidence: "test: test_cro_query_denied_returns_no_plaintext",
+    badge: "TESTED",
+  },
 ];
+
+function LatestDecisionCard({ response }: { response: ArtifactResponse | null }) {
+  if (!response) {
+    return (
+      <div className="latest-decision-card latest-decision-empty">
+        <h3>Latest Decision</h3>
+        <p className="empty">
+          Run a demo step or click Open Selected Artifact to run a permission check.
+        </p>
+      </div>
+    );
+  }
+  const plaintextReturned =
+    response.access.decision === "allow" && !!response.artifact.plaintext_content;
+  return (
+    <div className={`latest-decision-card decision-${response.access.decision}`}>
+      <h3>Latest Decision</h3>
+      <div className="latest-decision-grid">
+        <div className="latest-field">
+          <span className="latest-key">decision</span>
+          <strong className={response.access.decision}>{response.access.decision.toUpperCase()}</strong>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">reason</span>
+          <code>{response.access.reason}</code>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">principal</span>
+          <code>{response.principal_id}</code>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">artifact</span>
+          <code>{response.artifact.id}</code>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">request_id</span>
+          <code>{response.access.request_id ?? "—"}</code>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">latency</span>
+          <span>{response.access.latency_ms} ms</span>
+        </div>
+        <div className="latest-field">
+          <span className="latest-key">plaintext returned</span>
+          <strong className={plaintextReturned ? "allow" : "deny"}>
+            {plaintextReturned ? "yes" : "no"}
+          </strong>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ComplianceMatrix({
   metrics,
@@ -219,7 +290,7 @@ function ComplianceMatrix({
 }) {
   const p99Pass = metrics && metrics.count > 0 ? metrics.p99_ms < 200 : null;
   const p99Label =
-    metrics && metrics.count > 0 ? `${metrics.p99_ms} ms` : "Run demo steps first";
+    metrics && metrics.count > 0 ? `${metrics.p99_ms} ms` : "No live checks yet";
 
   function renderBadge(c: (typeof STATIC_CHECKS)[number]) {
     if (c.liveKey === "revocation" && hasQuarantined)
@@ -233,7 +304,7 @@ function ComplianceMatrix({
 
   return (
     <section className="card compliance-card">
-      <h2>Compliance Matrix</h2>
+      <h2>Evidence for judges</h2>
       <p className="compliance-sub">
         BasedAI Enterprise Memory Governance at Scale — every claim is backed by a named test or
         code reference
@@ -383,12 +454,12 @@ const DEMO_STEPS = [
     description: "Derives exec brief, then revokes source — quarantine cascades to descendants",
   },
   {
-    label: "Phase II memo shows quarantined",
-    description: "Amber badge; derived artifacts sealed by revoked lineage",
+    label: "Phase II memo and descendants show quarantined",
+    description: "Amber badges; derived artifacts sealed by revoked lineage",
   },
   {
-    label: "CEO opens Phase II memo again",
-    description: "DENY — derived_from_revoked_source; no plaintext",
+    label: "Try opening Phase II memo again",
+    description: "DENY — derived_from_revoked_source; no plaintext returned",
   },
   {
     label: "Review audit log",
@@ -423,32 +494,73 @@ export default function App() {
   const [expandedAuditId, setExpandedAuditId] = useState<string | null>(null);
   const [proofResult, setProofResult] = useState<Record<string, unknown> | null>(null);
   const [proofLoading, setProofLoading] = useState(false);
+  const [demoReady, setDemoReady] = useState(false);
+  const [initializing, setInitializing] = useState(true);
 
   const selectedUser = useMemo(
     () => users.find((u) => u.id === selectedUserId),
     [selectedUserId, users],
   );
+  const selectedArtifact = useMemo(
+    () => artifacts.find((a) => a.id === selectedArtifactId),
+    [artifacts, selectedArtifactId],
+  );
   const tokenFor = useCallback((userId: string) => tokens[userId], [tokens]);
-
-  const refresh = useCallback(async () => {
-    const [u, a, ev, m] = await Promise.all([
-      getJson<User[]>("/users"),
-      getJson<Artifact[]>("/artifacts"),
-      getJson<AuditEvent[]>("/audit"),
-      getJson<LatencyMetrics>("/metrics/permission-latency"),
-    ]);
-    setUsers(u);
-    setArtifacts(a);
-    setAudit(ev);
-    setMetrics(m);
-  }, []);
+  const currentToken = tokenFor(selectedUserId);
+  const canOpen =
+    demoReady && !!selectedUserId && !!currentToken && !!selectedArtifactId && !loading;
 
   const loadLineage = useCallback(async (artifactId: string) => {
     setLineage(await getJson<LineageResponse>(`/lineage/${artifactId}`));
   }, []);
 
+  const syncEvidence = useCallback(
+    async (artifactId?: string, requestId?: string) => {
+      const aid = artifactId ?? selectedArtifactId;
+      const lineagePromise: Promise<LineageResponse | null> = aid
+        ? getJson<LineageResponse>(`/lineage/${aid}`).catch(() => null)
+        : Promise.resolve(null);
+      const [u, a, ev, m, lin] = await Promise.all([
+        getJson<User[]>("/users"),
+        getJson<Artifact[]>("/artifacts"),
+        getJson<AuditEvent[]>("/audit"),
+        getJson<LatencyMetrics>("/metrics/permission-latency"),
+        lineagePromise,
+      ]);
+      setUsers(u);
+      setArtifacts(a);
+      setArtifactResponse((current) => {
+        if (!current) return current;
+        const refreshed = a.find((artifact) => artifact.id === current.artifact.id);
+        if (!refreshed) return current;
+        const mayKeepPlaintext =
+          current.access.decision === "allow" &&
+          (refreshed.status === "active" || refreshed.status === "redacted");
+        return {
+          ...current,
+          artifact: {
+            ...refreshed,
+            plaintext_content: mayKeepPlaintext
+              ? current.artifact.plaintext_content
+              : undefined,
+          },
+        };
+      });
+      setAudit(ev);
+      setMetrics(m);
+      if (lin) setLineage(lin);
+      const eventToExpand =
+        (requestId ? ev.find((event) => event.request_id === requestId) : null) ?? ev[0];
+      if (eventToExpand) setExpandedAuditId(eventToExpand.id);
+      return { users: u, artifacts: a, audit: ev, metrics: m, lineage: lin };
+    },
+    [selectedArtifactId],
+  );
+
   async function seedDemo() {
     setLoading(true);
+    setDemoReady(false);
+    setMessage("Seeding BVK-14 demo data...");
     try {
       const res = await postJson<SeedResponse>("/seed", {});
       setTokens(res.tokens);
@@ -459,14 +571,15 @@ export default function App() {
       setProofResult(null);
       setSelectedUserId("u_regulatory");
       setSelectedArtifactId("phase2_readiness_memo");
-      await refresh();
-      await loadLineage("phase2_readiness_memo");
+      await syncEvidence("phase2_readiness_memo");
+      setDemoReady(true);
       setMessage(
-        "BVK-14 demo seeded — 6 principals, 8 artifacts, capability grants loaded. Click Step 1 →",
+        "BVK-14 demo ready: Regulatory Lead selected, Phase II Readiness Memo loaded. Click Step 1.",
       );
       return res.tokens;
     } catch (e) {
-      setMessage(`Seed failed: ${(e as Error).message}`);
+      setDemoReady(false);
+      setMessage(`Seed failed: ${(e as Error).message}. Click Start / Reset Demo to retry.`);
       return {};
     } finally {
       setLoading(false);
@@ -479,17 +592,32 @@ export default function App() {
     overrideTokens?: Record<string, string>,
   ) {
     const tok = (overrideTokens ?? tokens)[userId];
+    if (!tok) {
+      setMessage("Start / Reset Demo first — capability token required.");
+      return null;
+    }
     setLoading(true);
     try {
       const response = await getJson<ArtifactResponse>(`/artifacts/${artifactId}`, tok);
       setSelectedUserId(userId);
       setSelectedArtifactId(artifactId);
       setArtifactResponse(response);
-      await Promise.all([refresh(), loadLineage(artifactId)]);
+      await syncEvidence(artifactId, response.access.request_id);
       const d = response.access.decision.toUpperCase();
       setMessage(`${d}: ${response.access.reason} (${response.access.latency_ms} ms)`);
+      return response;
     } catch (e) {
-      setMessage(`Open failed: ${(e as Error).message}`);
+      const errorMessage = (e as Error).message;
+      if (errorMessage.startsWith("401")) {
+        setDemoReady(false);
+        setArtifactResponse(null);
+        setMessage(
+          "Demo session expired or seed data is empty. Click Start / Reset Demo to reload capability tokens.",
+        );
+      } else {
+        setMessage(`Access check failed: ${errorMessage}`);
+      }
+      return null;
     } finally {
       setLoading(false);
     }
@@ -518,8 +646,7 @@ export default function App() {
         access: AccessResult;
       }>("/artifacts/adverse_event_memo/revoke", { purpose: "safety_review" }, tokenFor("u_ceo"));
 
-      await refresh();
-      await loadLineage("phase2_readiness_memo");
+      await syncEvidence("phase2_readiness_memo", result.access?.request_id);
       setSelectedArtifactId("phase2_readiness_memo");
 
       if (result.revoked) {
@@ -541,8 +668,7 @@ export default function App() {
   async function showQuarantineState() {
     setLoading(true);
     try {
-      await refresh();
-      await loadLineage("phase2_readiness_memo");
+      await syncEvidence("phase2_readiness_memo");
       setSelectedArtifactId("phase2_readiness_memo");
       setMessage(
         "Phase II readiness memo and descendants quarantined (amber badges). " +
@@ -559,9 +685,10 @@ export default function App() {
   async function showBiotechQuarantineDeny() {
     setLoading(true);
     try {
-      await openArtifact("phase2_readiness_memo", "u_ceo");
+      const response = await openArtifact("phase2_readiness_memo", "u_ceo");
+      if (!response) return;
       setMessage(
-        "Phase II memo: DENY — derived_from_revoked_source. " +
+        `Phase II memo: ${response?.access.decision.toUpperCase() ?? "DENY"} - derived_from_revoked_source. ` +
           (grandchildId ? `Exec Brief (${grandchildId}) also quarantined.` : ""),
       );
     } catch (e) {
@@ -574,13 +701,7 @@ export default function App() {
   async function showAuditEvidence() {
     setLoading(true);
     try {
-      const ev = await getJson<AuditEvent[]>("/audit");
-      setAudit(ev);
-      if (ev.length > 0) {
-        setExpandedAuditId(ev[0].id);
-      }
-      const m = await getJson<LatencyMetrics>("/metrics/permission-latency");
-      setMetrics(m);
+      const { audit: ev, metrics: m } = await syncEvidence(selectedArtifactId);
       setMessage(
         `Audit log: ${ev.length} events — expand rows for request_id, purpose, and structured provenance. ` +
           (m.count > 0 ? `P99 latency: ${m.p99_ms} ms — under 200 ms budget.` : ""),
@@ -595,11 +716,10 @@ export default function App() {
   async function showPermissionPathEvidence() {
     setLoading(true);
     try {
-      const m = await getJson<LatencyMetrics>("/metrics/permission-latency");
-      setMetrics(m);
+      await syncEvidence(selectedArtifactId);
       setMessage(
-        "Permission path: bearer token → resolve_principal() → evaluate_access() (pure SQL) → log_audit() → decrypt on allow only. " +
-          "0 model tokens · no LLM permission decision · open-weight generation only after authorization.",
+        "Permission path: bearer token -> resolve_principal() -> evaluate_access() (pure SQL) -> log_audit() -> decrypt on allow only. " +
+          "0 model tokens; no LLM permission decision; open-weight generation only after authorization.",
       );
     } catch (e) {
       setMessage(`Metrics failed: ${(e as Error).message}`);
@@ -618,9 +738,8 @@ export default function App() {
       } else if (i === 2) {
         setLoading(true);
         try {
-          await loadLineage("phase2_readiness_memo");
           setSelectedArtifactId("phase2_readiness_memo");
-          await refresh();
+          await syncEvidence("phase2_readiness_memo");
           setMessage(
             "Lineage: public_target_paper + internal_sar_table + toxicity_report + adverse_event_memo → phase2_readiness_memo.",
           );
@@ -653,10 +772,10 @@ export default function App() {
         tokenFor("u_intern"),
       );
       setProofResult({ proof: "intern_self_grant_biotech", ...r });
-      await refresh();
     } catch (e) {
       setProofResult({ error: (e as Error).message });
     } finally {
+      await syncEvidence(selectedArtifactId).catch(() => {});
       setProofLoading(false);
     }
   }
@@ -676,27 +795,42 @@ export default function App() {
         tokenFor("u_ceo"),
       );
       setProofResult({ proof: "governed_redaction", ...r });
-      await refresh();
     } catch (e) {
       setProofResult({ error: (e as Error).message });
     } finally {
+      await syncEvidence(selectedArtifactId).catch(() => {});
       setProofLoading(false);
     }
   }
 
   useEffect(() => {
-    seedDemo();
+    async function initDemo() {
+      setInitializing(true);
+      try {
+        await seedDemo();
+      } catch {
+        setDemoReady(false);
+        setMessage("Click Start / Reset Demo to load the BVK-14 scenario.");
+      } finally {
+        setInitializing(false);
+      }
+    }
+    initDemo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (selectedArtifactId) loadLineage(selectedArtifactId).catch(() => {});
-  }, [selectedArtifactId, loadLineage]);
+    if (demoReady && selectedArtifactId) {
+      loadLineage(selectedArtifactId).catch(() => {});
+    }
+  }, [selectedArtifactId, loadLineage, demoReady]);
 
   const maskedToken =
-    selectedUser && tokens[selectedUser.id]
-      ? `${tokens[selectedUser.id].slice(0, 6)}…${tokens[selectedUser.id].slice(-4)}`
-      : "—";
+    selectedUser && currentToken
+      ? `${currentToken.slice(0, 6)}…${currentToken.slice(-4)}`
+      : initializing || loading
+        ? "loading token"
+        : "Click Start / Reset Demo";
 
   return (
     <main className="app-shell">
@@ -704,48 +838,112 @@ export default function App() {
       <header className="hero">
         <div className="hero-text">
           <p className="eyebrow">BioVault · BasedAI Enterprise Memory Governance at Scale</p>
-          <h1>Lineage-secured memory for AI science agents</h1>
+          <h1>BioVault: lineage-secured memory for AI science agents</h1>
           <p>
-            BioVault secures AI-generated scientific artifacts by carrying source permissions through
-            lineage. When an adverse-event source is revoked, every derived Phase II memo quarantines —
-            external CROs denied, every decision audited, 0 model tokens in the permission path.
+            Deterministic governed memory before generation: capability grants, lineage, revocation,
+            and audit decide what context an AI science agent may see.
+          </p>
+          <p className="hero-proof">
+            Phase II memo / external CRO denied / adverse-event source revoked / derived memos
+            quarantined / every decision audited.
+          </p>
+          <p className="vercel-note">
+            Hosted demo uses ephemeral SQLite. Click Start / Reset Demo if state is empty.
           </p>
         </div>
         <div className="actions">
           <div className="action-row">
             <button disabled={loading} onClick={() => seedDemo()} className="btn-primary">
-              ↺ Seed / Reset Demo
-            </button>
-            <button
-              disabled={loading}
-              onClick={() => openArtifact()}
-              className="btn-secondary"
-            >
-              ▶ Open Selected Artifact
+              ↺ Start / Reset Demo
             </button>
           </div>
         </div>
       </header>
 
-      {/* Compliance matrix */}
-      <ComplianceMatrix
-        metrics={metrics}
-        auditCount={audit.length}
-        hasQuarantined={artifacts.some((a) => a.status === "quarantined")}
-      />
+      {!demoReady && !initializing && (
+        <section className="card demo-prompt">
+          <p>
+            <strong>Demo not loaded.</strong> Click <strong>Start / Reset Demo</strong> to seed the
+            BVK-14 kinase programme — Regulatory Lead, Phase II memo, and capability tokens.
+          </p>
+        </section>
+      )}
 
-      {/* Concept cards */}
-      <ConceptCards />
-
-      {/* Comparison cards — why not silos / why not LLM filtering */}
-      <ComparisonCards />
-
-      {/* Demo flow */}
-      <section className="card demo-steps">
+      {/* Demo-first zone */}
+      <section className="card demo-primary">
         <h2>
-          Demo Flow{" "}
-          <span className="demo-sub">BVK-14 kinase programme · Click steps in order</span>
+          Guided Demo{" "}
+          <span className="demo-sub">Phase II readiness · CRO denied · adverse-event revocation</span>
         </h2>
+
+        <div className="demo-controls">
+          <label>
+            Acting principal
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              disabled={!demoReady || users.length === 0}
+            >
+              {users.length === 0 ? (
+                <option value="u_regulatory">Regulatory Lead - loading token...</option>
+              ) : (
+                users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} — {u.role}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          <label>
+            Selected artifact
+            <select
+              value={selectedArtifactId}
+              onChange={(e) => {
+                setSelectedArtifactId(e.target.value);
+                setArtifactResponse(null);
+              }}
+              disabled={!demoReady || artifacts.length === 0}
+            >
+              {artifacts.length === 0 ? (
+                <option value="phase2_readiness_memo">Phase II Readiness Memo - loading...</option>
+              ) : (
+                artifacts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.title}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          <div className="user-meta">
+            <strong>{selectedUser?.team ?? "Regulatory Lead loading"}</strong>
+            <span className="token-line">
+              capability token:{" "}
+              <code className={`token-value${currentToken ? "" : " token-missing"}`}>
+                {maskedToken}
+              </code>
+            </span>
+          </div>
+
+          <button
+            disabled={!canOpen}
+            onClick={() => openArtifact()}
+            className="btn-secondary"
+            title={
+              canOpen
+                ? "Run permission check on selected artifact"
+                : "Requires principal, token, and artifact"
+            }
+          >
+            ▶ Open Selected Artifact
+          </button>
+        </div>
+
+        <p className="status-line">{initializing ? "Loading demo…" : loading ? "Working…" : message}</p>
+
         <ol className="step-list">
           {DEMO_STEPS.map((step, i) => (
             <li
@@ -760,7 +958,7 @@ export default function App() {
             >
               <button
                 className="step-btn"
-                disabled={loading}
+                disabled={loading || !demoReady}
                 onClick={() => runStep(i)}
                 title={step.description}
               >
@@ -771,34 +969,11 @@ export default function App() {
             </li>
           ))}
         </ol>
-      </section>
 
-      {/* Principal switcher */}
-      <section className="toolbar card">
-        <label>
-          Acting principal
-          <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)}>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name} — {u.role}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="user-meta">
-          <strong>{selectedUser?.team ?? "—"}</strong>
-          <span className="token-line">
-            capability token:{" "}
-            <code className="token-value">{maskedToken}</code>
-          </span>
+        <div className="decision-row">
+          <LatestDecisionCard response={artifactResponse} />
+          <TokenBoundaryStrip />
         </div>
-        <button
-          disabled={loading || !selectedArtifactId}
-          onClick={() => openArtifact()}
-        >
-          Open Selected Artifact
-        </button>
-        <p className="status-line">{loading ? "Working…" : message}</p>
       </section>
 
       {/* Flow banner — pipeline glance */}
@@ -809,23 +984,27 @@ export default function App() {
         {/* Artifact list */}
         <div className="card artifact-list">
           <h2>Shared Scientific Memory</h2>
-          {artifacts.map((a) => (
-            <button
-              className={`artifact-row${a.id === selectedArtifactId ? " selected" : ""} status-${a.status}`}
-              key={a.id}
-              onClick={() => {
-                setSelectedArtifactId(a.id);
-                setArtifactResponse(null);
-              }}
-            >
-              <span className="artifact-title">{a.title}</span>
-              <div className="artifact-badges">
-                <span className="artifact-type">{a.type}</span>
-                <SensitivityBadge sensitivity={a.sensitivity} />
-                <StatusBadge status={a.status} />
-              </div>
-            </button>
-          ))}
+          {!demoReady || artifacts.length === 0 ? (
+            <p className="empty">Start / Reset Demo to load artifacts.</p>
+          ) : (
+            artifacts.map((a) => (
+              <button
+                className={`artifact-row${a.id === selectedArtifactId ? " selected" : ""} status-${a.status}`}
+                key={a.id}
+                onClick={() => {
+                  setSelectedArtifactId(a.id);
+                  setArtifactResponse(null);
+                }}
+              >
+                <span className="artifact-title">{a.title}</span>
+                <div className="artifact-badges">
+                  <span className="artifact-type">{a.type}</span>
+                  <SensitivityBadge sensitivity={a.sensitivity} />
+                  <StatusBadge status={a.status} />
+                </div>
+              </button>
+            ))
+          )}
         </div>
 
         {/* Detail panel — access check result */}
@@ -858,9 +1037,9 @@ export default function App() {
             </>
           ) : (
             <p className="empty">
-              Select an artifact and click "Open Selected Artifact".
-              The server will run a deterministic permission check — decide allow/deny —
-              and log the event before returning anything here.
+              {demoReady
+                ? 'Select an artifact and click "Open Selected Artifact" or run Step 1.'
+                : "Start / Reset Demo first."}
             </p>
           )}
         </div>
@@ -868,6 +1047,11 @@ export default function App() {
         {/* Lineage panel */}
         <div className="card lineage-panel">
           <h2>Lineage</h2>
+          {selectedArtifact && (
+            <p className="lineage-focus">
+              Viewing: <strong>{selectedArtifact.title}</strong>
+            </p>
+          )}
           {lineage ? (
             <>
               <h3>Direct Parents</h3>
@@ -912,60 +1096,11 @@ export default function App() {
               />
             </>
           ) : (
-            <p className="empty">No lineage loaded.</p>
+            <p className="empty">
+              {demoReady ? "Select an artifact to view lineage." : "Start / Reset Demo first."}
+            </p>
           )}
         </div>
-      </section>
-
-      {/* Latency metrics */}
-      {metrics && metrics.count > 0 && (
-        <section className="card metrics-card">
-          <h2>Permission Latency</h2>
-          <div className="metrics-grid">
-            <MetricTile label="Checks" value={String(metrics.count)} />
-            <MetricTile label="Allow" value={String(metrics.allow_count)} accent="green" />
-            <MetricTile label="Deny" value={String(metrics.deny_count)} accent="red" />
-            <MetricTile label="Mean" value={`${metrics.mean_ms} ms`} />
-            <MetricTile label="Median" value={`${metrics.median_ms} ms`} />
-            <MetricTile label="p95" value={`${metrics.p95_ms} ms`} />
-            <MetricTile
-              label="p99"
-              value={`${metrics.p99_ms} ms`}
-              accent={metrics.p99_ms < 200 ? "green" : "red"}
-            />
-            <MetricTile label="Max" value={`${metrics.max_ms} ms`} />
-          </div>
-        </section>
-      )}
-
-      {/* Security Proofs — optional bonus demo */}
-      <section className="card proof-card">
-        <h2>Security Proofs</h2>
-        <p className="compliance-sub">
-          On-demand evidence. These do not block the main demo — run them to show specific security
-          properties live. Every action is audited.
-        </p>
-        <div className="proof-buttons">
-          <button
-            className="btn-secondary"
-            disabled={proofLoading || !tokens["u_intern"]}
-            onClick={proofInternSelfGrant}
-            title="Intern attempts to grant themselves read on the SAR table — must be denied"
-          >
-            Proof 1 — Intern self-grant attempt (expect DENY)
-          </button>
-          <button
-            className="btn-primary"
-            disabled={proofLoading || !tokens["u_ceo"]}
-            onClick={proofOwnerRedaction}
-            title="CEO creates a governed redacted derivation — must produce redaction attestation"
-          >
-            Proof 2 — CEO governed redaction (expect attestation_id)
-          </button>
-        </div>
-        {proofResult && (
-          <pre className="proof-result">{JSON.stringify(proofResult, null, 2)}</pre>
-        )}
       </section>
 
       {/* Audit log */}
@@ -1015,11 +1150,74 @@ export default function App() {
           ))}
           {audit.length === 0 && (
             <p className="empty" style={{ padding: "12px 0" }}>
-              No audit events yet.
+              Run Step 1 or Step 2 to generate audit events.
             </p>
           )}
         </div>
       </section>
+
+      {/* Latency metrics */}
+      {metrics && metrics.count > 0 && (
+        <section className="card metrics-card">
+          <h2>Permission Latency</h2>
+          <div className="metrics-grid">
+            <MetricTile label="Checks" value={String(metrics.count)} />
+            <MetricTile label="Allow" value={String(metrics.allow_count)} accent="green" />
+            <MetricTile label="Deny" value={String(metrics.deny_count)} accent="red" />
+            <MetricTile label="Mean" value={`${metrics.mean_ms} ms`} />
+            <MetricTile label="Median" value={`${metrics.median_ms} ms`} />
+            <MetricTile label="p95" value={`${metrics.p95_ms} ms`} />
+            <MetricTile
+              label="p99"
+              value={`${metrics.p99_ms} ms`}
+              accent={metrics.p99_ms < 200 ? "green" : "red"}
+            />
+            <MetricTile label="Max" value={`${metrics.max_ms} ms`} />
+          </div>
+        </section>
+      )}
+
+      {/* Evidence for judges — collapsible compliance matrix */}
+      <details className="evidence-section">
+        <summary className="evidence-summary">Evidence for judges — compliance matrix</summary>
+        <ComplianceMatrix
+          metrics={metrics}
+          auditCount={audit.length}
+          hasQuarantined={artifacts.some((a) => a.status === "quarantined")}
+        />
+        <ConceptCards />
+        <ComparisonCards />
+      </details>
+
+      {/* Optional advanced checks */}
+      <details className="card proof-card optional-section">
+        <summary className="optional-summary">Optional advanced checks</summary>
+        <p className="compliance-sub">
+          On-demand evidence. These do not block the main demo — run them to show specific security
+          properties live. Every action is audited.
+        </p>
+        <div className="proof-buttons">
+          <button
+            className="btn-secondary"
+            disabled={proofLoading || !tokens["u_intern"]}
+            onClick={proofInternSelfGrant}
+            title="Intern attempts to grant themselves read on the SAR table — must be denied"
+          >
+            Proof 1 — Intern self-grant attempt (expect DENY)
+          </button>
+          <button
+            className="btn-primary"
+            disabled={proofLoading || !tokens["u_ceo"]}
+            onClick={proofOwnerRedaction}
+            title="CEO creates a governed redacted derivation — must produce redaction attestation"
+          >
+            Proof 2 — CEO governed redaction (expect attestation_id)
+          </button>
+        </div>
+        {proofResult && (
+          <pre className="proof-result">{JSON.stringify(proofResult, null, 2)}</pre>
+        )}
+      </details>
     </main>
   );
 }
@@ -1027,6 +1225,38 @@ export default function App() {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+function TokenBoundaryStrip() {
+  const tiles = [
+    {
+      label: "Permission check tokens",
+      value: "0",
+      detail: "Capability, lineage, revocation, and audit run before generation.",
+    },
+    {
+      label: "Governance timing",
+      value: "Before generation",
+      detail: "The model only sees context after deterministic authorization.",
+    },
+    {
+      label: "Access decision",
+      value: "SQL, not a prompt",
+      detail: "No LLM sensitivity classifier decides access.",
+    },
+  ];
+
+  return (
+    <div className="token-boundary-strip" aria-label="Anti-token-burn positioning">
+      {tiles.map((tile) => (
+        <div className="token-boundary-tile" key={tile.label}>
+          <span className="token-boundary-label">{tile.label}</span>
+          <strong>{tile.value}</strong>
+          <span>{tile.detail}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /**
  * Narrow banner that makes the request pipeline visible at a glance.
@@ -1038,7 +1268,7 @@ function FlowBanner() {
   const steps = [
     { label: "Bearer token", sub: "principal identity" },
     { label: "resolve_principal()", sub: "SHA-256 lookup" },
-    { label: "evaluate_access()", sub: "SQL / no model" },
+    { label: "evaluate_access()", sub: "SQL / 0 tokens" },
     { label: "log_audit()", sub: "every decision" },
     { label: "Decrypt content", sub: "allow only" },
   ];

@@ -1,0 +1,22 @@
+# Render Blueprint — BioVault backend (FastAPI + SQLite demo).
+# Alternative split deploy: this service + Vercel frontend with Root Directory `frontend`.
+# Recommended: unified Vercel deploy from repo root (see docs/DEPLOYMENT.md and vercel.json).
+#
+# After deploy: open the Vercel frontend, click "Seed / Reset Demo" once.
+
+services:
+  - type: web
+    name: biovault-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: DEMO_ALLOW_ALL_CORS
+        value: "false"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false

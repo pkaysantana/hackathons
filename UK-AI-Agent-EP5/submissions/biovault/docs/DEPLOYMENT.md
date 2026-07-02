@@ -36,9 +36,9 @@ The frontend uses `/api` as its API base in production automatically — no cros
 
 ### Steps
 
-1. In Vercel: **Add New → Project** → import `pkaysantana/hackathons`.
-2. Set **Root Directory** to `UK-AI-Agent-EP5/submissions/biovault`. Do **not** set it to `frontend/`.
-3. Vercel reads [`vercel.json`](../vercel.json) at the submission root and builds both services. The backend uses [`backend/pyproject.toml`](../backend/pyproject.toml) for Python dependencies (Vercel prefers this over `requirements.txt`).
+1. In Vercel: **Add New → Project** → import this repository.
+2. Leave **Root Directory** as `.` (repo root). Do **not** set it to `frontend/`.
+3. Vercel reads [`vercel.json`](../vercel.json) at the repo root and builds both services. The backend uses [`backend/pyproject.toml`](../backend/pyproject.toml) for Python dependencies (Vercel prefers this over `requirements.txt`).
 4. Deploy. No environment variables are required for the basic demo.
 5. Open your deployment URL (e.g. `https://biovault.vercel.app`).
 6. Click **Seed / Reset Demo** once — that calls `POST /api/seed`.
@@ -248,7 +248,7 @@ curl https://YOUR-RENDER-URL/health
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Import fails or only frontend builds | Root Directory set to `frontend/` | Re-import with Root Directory `UK-AI-Agent-EP5/submissions/biovault` |
+| Import fails or only frontend builds | Root Directory set to `frontend/` | Re-import with Root Directory `.` (repo root) |
 | API 404 on `/health` | Hitting frontend instead of backend | Use `/api/health`, not `/health`, on the public URL |
 | Empty users/artifacts | No seed yet | Click **Seed / Reset Demo** |
 | Data gone after redeploy | Ephemeral SQLite on serverless | Re-seed demo — expected for hackathon demo |

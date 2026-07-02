@@ -17,6 +17,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.sika_route import (
+    KASPA_POLICY_HASH_LABEL,
+    MarketRoundInput,
+    list_demo_scenarios,
+    run_all_demo_rounds,
+    run_demo_scenario,
+    run_market_round,
+)
+
 
 # DB path is overridable so tests can use an isolated database.
 def _default_db_path() -> str:
@@ -1058,6 +1067,44 @@ def audit(limit: int = Query(default=200, le=500)) -> list[dict[str, Any]]:
             "SELECT * FROM audit_events ORDER BY timestamp DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# SikaRoute Market — Kaspa-ready agent spending policy (no live Kaspa)
+# ---------------------------------------------------------------------------
+
+@app.get("/sika-route/market/scenarios")
+def sika_route_list_scenarios() -> dict[str, Any]:
+    """List demo market-round scenarios for the spending-policy hook."""
+    return {"service": "sika-route", "scenarios": list_demo_scenarios()}
+
+
+@app.post("/sika-route/market/scenarios/{scenario_id}/run")
+def sika_route_run_scenario(scenario_id: str) -> dict[str, Any]:
+    """Run a preset demo market round and return agent_spending_policy + policy_hash."""
+    try:
+        result = run_demo_scenario(scenario_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="scenario_not_found") from exc
+    print(f"{KASPA_POLICY_HASH_LABEL}: {result['policy_hash']}")
+    return result
+
+
+@app.post("/sika-route/market/round")
+def sika_route_market_round(round_input: MarketRoundInput) -> dict[str, Any]:
+    """Run one SikaRoute market round; every round emits agent_spending_policy."""
+    result = run_market_round(round_input)
+    print(f"{KASPA_POLICY_HASH_LABEL}: {result['policy_hash']}")
+    return result
+
+
+@app.get("/sika-route/market/demo-rounds")
+def sika_route_demo_rounds() -> dict[str, Any]:
+    """Run all built-in demo market rounds (policy hook smoke test)."""
+    rounds = run_all_demo_rounds()
+    for item in rounds:
+        print(f"{KASPA_POLICY_HASH_LABEL}: {item['policy_hash']}")
+    return {"service": "sika-route", "rounds": rounds}
 
 
 @app.get("/metrics/permission-latency")

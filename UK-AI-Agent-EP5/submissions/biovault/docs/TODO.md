@@ -78,8 +78,8 @@ Before you ship anything, ask:
 
 ### Close the "where's the agent?" gap — biotech framing
 
-- [ ] Minimal **agent script** calling `POST /query` as an **AI science agent** (External CRO token)
-- [ ] Script tries to retrieve Phase II Readiness Memo → **denied** → agent refuses to summarise (no clinical leak)
+- [x] Minimal **agent script** calling `POST /query` as an **AI science agent** (External CRO token) — `scripts/demo_agent_cro.py`
+- [x] Script tries to retrieve Phase II Readiness Memo → **denied** → agent refuses to summarise (no clinical leak)
 - [ ] Document which open-weight model (if any) — only **after** `/query` allow
 
 | Option | Effort | Notes |
@@ -95,9 +95,18 @@ Before you ship anything, ask:
 
 ### Tests & stability
 
-- [ ] `python -m pytest -q` — all passed
+- [x] `python -m pytest -q` — 35 tests including Judge Max-Out pack
 - [ ] `npm run build` — clean
 - [ ] Re-seed on deployed URL after cold start
+
+### Judge Max-Out evidence (BasedAI)
+
+- [x] `test_stale_capability_denied_after_source_revoke` — simulated source ACL/revocation
+- [x] `test_expired_grant_denies_artifact_read` — temporal `expires_at` grant check
+- [x] `test_cro_query_denied_returns_no_plaintext` — query-time gate, no plaintext on deny
+- [x] README requirement mapping table (implementation / evidence / honest scope)
+- [x] UI Evidence for judges rows (temporal, query gate, simulated ACL sync)
+- [x] `scripts/demo_agent_cro.py` — optional CRO agent CLI
 
 ---
 
@@ -114,7 +123,7 @@ Before you ship anything, ask:
 - [x] Permission engine (capabilities, lineage, revoke propagation, audit)
 - [x] Biotech seed data (BVK-14, Phase II memo, adverse event, CRO/CEO/regulatory principals)
 - [x] Biotech 8-step demo flow in UI
-- [x] Biotech pytest coverage (CRO deny, adverse-event revocation)
+- [x] Biotech pytest coverage (CRO deny, adverse-event revocation, Judge Max-Out pack)
 - [x] Submission folder + PR #3
 - [x] Deploy configs
 
