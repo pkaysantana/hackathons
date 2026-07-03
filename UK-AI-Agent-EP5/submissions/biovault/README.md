@@ -136,6 +136,23 @@ cd backend
 python -m pytest -q
 ```
 
+## Judge Verification
+
+BioVault includes a judge-facing spec and stdlib verification harness:
+
+- Spec: [docs/JUDGE_SPEC.md](docs/JUDGE_SPEC.md)
+- Verify on Windows: `py -3 scripts\verify_submission.py`
+- Verify elsewhere: `python scripts/verify_submission.py`
+
+The harness checks backend tests, frontend build, source-lineage permission invariants, no model calls in the permission path, submission hygiene, BioVault identity, and honest BasedAI scope wording.
+
+Manual equivalents:
+
+```powershell
+cd backend && py -3 -m pytest -q
+cd frontend && npm run build
+```
+
 Planning: [docs/TODO.md](docs/TODO.md) · [docs/BEST_CASE.md](docs/BEST_CASE.md) · Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ### Optional CRO agent script
